@@ -17,9 +17,10 @@ __version__ = "1.0.4"
 __author__ = "Statotech Systems"
 
 import gi
-gi.require_version('Gtk', '3.0')
-gi.require_version('AppIndicator3', '0.1')
-gi.require_version('Notify', '0.7')
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("AppIndicator3", "0.1")
+gi.require_version("Notify", "0.7")
 
 from gi.repository import Gtk, AppIndicator3, GLib, Notify, Gdk, Pango
 import cairo
@@ -68,8 +69,8 @@ def get_color_for_pct(pct: float) -> str:
 
 def hex_to_rgb(hex_color: str) -> tuple:
     """Convert hex color to RGB tuple (0-1 range)."""
-    hex_color = hex_color.lstrip('#')
-    return tuple(int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+    hex_color = hex_color.lstrip("#")
+    return tuple(int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
 def write_icon(pct: float, error: bool = False) -> str:
@@ -93,13 +94,13 @@ def write_icon(pct: float, error: bool = False) -> str:
 
     # Draw filled circle (background)
     ctx.set_source_rgba(r, g, b, 0.25)
-    ctx.arc(size/2, size/2, 13, 0, 2 * 3.14159)
+    ctx.arc(size / 2, size / 2, 13, 0, 2 * 3.14159)
     ctx.fill()
 
     # Draw circle border
     ctx.set_source_rgb(r, g, b)
     ctx.set_line_width(2)
-    ctx.arc(size/2, size/2, 13, 0, 2 * 3.14159)
+    ctx.arc(size / 2, size / 2, 13, 0, 2 * 3.14159)
     ctx.stroke()
 
     # Draw "C" text
@@ -109,7 +110,7 @@ def write_icon(pct: float, error: bool = False) -> str:
 
     text = "C"
     x_bearing, y_bearing, width, height, x_advance, y_advance = ctx.text_extents(text)
-    ctx.move_to(size/2 - width/2 - x_bearing, size/2 - height/2 - y_bearing)
+    ctx.move_to(size / 2 - width / 2 - x_bearing, size / 2 - height / 2 - y_bearing)
     ctx.show_text(text)
 
     # Save to file
@@ -122,6 +123,7 @@ def write_icon(pct: float, error: bool = False) -> str:
 
 
 # ── Token loading ───────────────────────────────────────────────────────────
+
 
 def load_token() -> str | None:
     """Try loading OAuth token from Claude Code creds, then config file."""
@@ -180,6 +182,7 @@ def save_token(token: str):
 
 # ── API call ────────────────────────────────────────────────────────────────
 
+
 class RateLimitError(Exception):
     pass
 
@@ -212,6 +215,7 @@ def fetch_usage(token: str) -> dict | None:
 
 # ── Time formatting ─────────────────────────────────────────────────────────
 
+
 def format_reset_time(iso_str: str | None) -> str:
     if not iso_str:
         return "unknown"
@@ -236,10 +240,17 @@ def format_reset_time(iso_str: str | None) -> str:
 
 # ── Detail popup window ─────────────────────────────────────────────────────
 
+
 class UsageDetailWindow(Gtk.Window):
     """Popup window showing detailed usage info."""
 
-    def __init__(self, usage_data: dict | None, last_updated: str, token_status: str, user_info: dict | None = None):
+    def __init__(
+        self,
+        usage_data: dict | None,
+        last_updated: str,
+        token_status: str,
+        user_info: dict | None = None,
+    ):
         super().__init__(title="Claude AI Usage")
         self.set_default_size(380, -1)
         self.set_resizable(False)
@@ -283,7 +294,11 @@ class UsageDetailWindow(Gtk.Window):
         header.pack_start(title, False, False, 0)
 
         status_label = Gtk.Label(label=f"● {token_status}")
-        sc = "status-ok" if token_status == "Connected" else ("status-warn" if token_status == "Rate limited" else "status-err")
+        sc = (
+            "status-ok"
+            if token_status == "Connected"
+            else ("status-warn" if token_status == "Rate limited" else "status-err")
+        )
         status_label.get_style_context().add_class(sc)
         status_label.set_halign(Gtk.Align.END)
         header.pack_end(status_label, False, False, 0)
@@ -329,7 +344,10 @@ class UsageDetailWindow(Gtk.Window):
                 credits_lbl.set_halign(Gtk.Align.START)
                 vbox.pack_start(credits_lbl, False, False, 0)
 
-            for key, label_text in [("five_hour", "5-HOUR WINDOW"), ("seven_day", "7-DAY WINDOW")]:
+            for key, label_text in [
+                ("five_hour", "5-HOUR WINDOW"),
+                ("seven_day", "7-DAY WINDOW"),
+            ]:
                 bucket = usage_data.get(key)
                 if not bucket:
                     continue
@@ -356,7 +374,9 @@ class UsageDetailWindow(Gtk.Window):
                 val = Gtk.Label(label=f"{pct}%")
                 val.get_style_context().add_class("metric-value")
                 color = get_color_for_pct(utilization_decimal)
-                val.set_markup(f'<span foreground="{color}" font_weight="bold" font="28">{pct}%</span>')
+                val.set_markup(
+                    f'<span foreground="{color}" font_weight="bold" font="28">{pct}%</span>'
+                )
                 val.set_halign(Gtk.Align.START)
                 vbox.pack_start(val, False, False, 0)
 
@@ -375,7 +395,8 @@ class UsageDetailWindow(Gtk.Window):
                 bar.remove_offset_value("high")
                 bar.remove_offset_value("full")
                 bar_css = Gtk.CssProvider()
-                bar_css.load_from_data(f"""
+                bar_css.load_from_data(
+                    f"""
                     levelbar trough {{
                         background-color: #2a2a4a;
                         border-radius: 4px;
@@ -386,8 +407,11 @@ class UsageDetailWindow(Gtk.Window):
                         border-radius: 4px;
                         min-height: 8px;
                     }}
-                """.encode())
-                bar.get_style_context().add_provider(bar_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+                """.encode()
+                )
+                bar.get_style_context().add_provider(
+                    bar_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                )
 
                 bar_box.pack_start(bar, True, True, 0)
                 vbox.pack_start(bar_box, False, False, 0)
@@ -400,7 +424,9 @@ class UsageDetailWindow(Gtk.Window):
                 reset_lbl.set_halign(Gtk.Align.START)
                 vbox.pack_start(reset_lbl, False, False, 0)
         else:
-            err_label = Gtk.Label(label="Unable to fetch usage data.\nCheck token and connectivity.")
+            err_label = Gtk.Label(
+                label="Unable to fetch usage data.\nCheck token and connectivity."
+            )
             err_label.get_style_context().add_class("status-err")
             vbox.pack_start(err_label, False, False, 8)
 
@@ -421,7 +447,9 @@ class UsageDetailWindow(Gtk.Window):
             button { color: #8888aa; background: transparent; border: none; padding: 2px 8px; }
             button:hover { color: #e0e0ff; }
         """)
-        refresh_btn.get_style_context().add_provider(refresh_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        refresh_btn.get_style_context().add_provider(
+            refresh_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
         refresh_btn.connect("clicked", lambda _: (self.destroy(), app.force_refresh()))
         footer.pack_end(refresh_btn, False, False, 0)
 
@@ -440,11 +468,13 @@ class UsageDetailWindow(Gtk.Window):
 
 # ── Token entry dialog ──────────────────────────────────────────────────────
 
+
 class TokenDialog(Gtk.Dialog):
     def __init__(self, parent=None):
         super().__init__(title="Claude OAuth Token", transient_for=parent, flags=0)
-        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                         Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        self.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK
+        )
         self.set_default_size(450, -1)
 
         box = self.get_content_area()
@@ -476,6 +506,7 @@ class TokenDialog(Gtk.Dialog):
 
 # ── Main App ────────────────────────────────────────────────────────────────
 
+
 class ClaudeUsageApp:
     def __init__(self):
         self.usage_data: dict | None = None
@@ -483,7 +514,9 @@ class ClaudeUsageApp:
         self.last_updated: str = "never"
         self.token: str | None = None
         self.running = True
-        self.last_notification_threshold: int = 0  # Track last notified threshold (0, 75, 90, 100)
+        self.last_notification_threshold: int = (
+            0  # Track last notified threshold (0, 75, 90, 100)
+        )
         self.startup_notification_sent: bool = False
 
         Notify.init(APP_NAME)
@@ -568,7 +601,9 @@ class ClaudeUsageApp:
                     GLib.idle_add(self._update_ui, data)
             except RateLimitError:
                 # Show ERR but keep last good data so details window still works
-                print("[claude-usage] Rate limited, backing off 10 min", file=sys.stderr)
+                print(
+                    "[claude-usage] Rate limited, backing off 10 min", file=sys.stderr
+                )
                 GLib.idle_add(self._set_rate_limit_ui)
                 time.sleep(600)
                 continue
@@ -578,20 +613,31 @@ class ClaudeUsageApp:
 
     def force_refresh(self):
         """Immediate refresh triggered by user."""
+
         def _do():
             if self.token:
-                data = fetch_usage(self.token)
-                GLib.idle_add(self._update_ui, data)
+                try:
+                    data = fetch_usage(self.token)
+                    GLib.idle_add(self._update_ui, data)
+                except RateLimitError:
+                    print("[claude-usage] Rate limited during refresh", file=sys.stderr)
+                    GLib.idle_add(self._set_rate_limit_ui)
+                except Exception as e:
+                    print(f"[claude-usage] Refresh error: {e}", file=sys.stderr)
+
         threading.Thread(target=_do, daemon=True).start()
 
     def _set_rate_limit_ui(self):
-        """Show ERR state without clearing cached usage_data (preserves details window)."""
+        """On rate limit, show cached usage if available, otherwise ERR."""
         self.last_updated = datetime.now().strftime("%H:%M:%S")
-        self.indicator.set_label("ERR", "")
-        icon_path = write_icon(0, error=True)
-        self.indicator.set_icon_full(icon_path, "Error")
-        self.item_5h.set_label("5h: rate limited")
-        self.item_7d.set_label("7d: rate limited")
+        if self.usage_data:
+            self._update_ui(self.usage_data)
+        else:
+            self.indicator.set_label("ERR", "")
+            icon_path = write_icon(0, error=True)
+            self.indicator.set_icon_full(icon_path, "Error")
+            self.item_5h.set_label("5h: rate limited")
+            self.item_7d.set_label("7d: rate limited")
         return False
 
     def _update_ui(self, data: dict | None):
@@ -626,8 +672,12 @@ class ClaudeUsageApp:
             icon_path = write_icon(dominant)
             self.indicator.set_icon_full(icon_path, f"{pct5}% | {pct7}%")
 
-            self.item_5h.set_label(f"5h: {pct5}%  (resets {format_reset_time(five.get('resets_at'))})")
-            self.item_7d.set_label(f"7d: {pct7}%  (resets {format_reset_time(seven.get('resets_at'))})")
+            self.item_5h.set_label(
+                f"5h: {pct5}%  (resets {format_reset_time(five.get('resets_at'))})"
+            )
+            self.item_7d.set_label(
+                f"7d: {pct7}%  (resets {format_reset_time(seven.get('resets_at'))})"
+            )
 
             # Extra usage (pay-as-you-go credits)
             extra = data.get("extra_usage") or {}
@@ -712,7 +762,9 @@ class ClaudeUsageApp:
             token_status = "Rate limited"
         else:
             token_status = "Error"
-        UsageDetailWindow(self.usage_data, self.last_updated, token_status, self.subscription_info)
+        UsageDetailWindow(
+            self.usage_data, self.last_updated, token_status, self.subscription_info
+        )
 
     def on_set_token(self, _widget):
         dialog = TokenDialog()
