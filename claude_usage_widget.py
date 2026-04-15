@@ -622,9 +622,9 @@ class ClaudeUsageApp:
 
             dominant = max(u5_decimal, u7_decimal)
 
-            self.indicator.set_label(f"{pct5}%", "")
+            self.indicator.set_label(f"{pct5}% | {pct7}%", "")
             icon_path = write_icon(dominant)
-            self.indicator.set_icon_full(icon_path, f"{pct5}%")
+            self.indicator.set_icon_full(icon_path, f"{pct5}% | {pct7}%")
 
             self.item_5h.set_label(f"5h: {pct5}%  (resets {format_reset_time(five.get('resets_at'))})")
             self.item_7d.set_label(f"7d: {pct7}%  (resets {format_reset_time(seven.get('resets_at'))})")

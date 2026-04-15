@@ -33,3 +33,4 @@ config.json
 # Temp files
 /tmp/
 *.tmp
+.omc/
