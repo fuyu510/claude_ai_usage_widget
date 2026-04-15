@@ -32,7 +32,7 @@ import urllib.error
 import ssl
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -184,7 +184,8 @@ def save_token(token: str):
 
 
 class RateLimitError(Exception):
-    pass
+    def __init__(self, retry_after: int = 600):
+        self.retry_after = retry_after
 
 
 def fetch_usage(token: str) -> dict | None:
@@ -205,7 +206,8 @@ def fetch_usage(token: str) -> dict | None:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 429:
-            raise RateLimitError()
+            retry_after = int(e.headers.get("Retry-After", 600))
+            raise RateLimitError(retry_after)
         print(f"[claude-usage] HTTP {e.code}: {e.reason}", file=sys.stderr)
         return None
     except Exception as e:
@@ -250,6 +252,7 @@ class UsageDetailWindow(Gtk.Window):
         last_updated: str,
         token_status: str,
         user_info: dict | None = None,
+        rate_limit_until: datetime | None = None,
     ):
         super().__init__(title="Claude AI Usage")
         self.set_default_size(380, -1)
@@ -430,6 +433,17 @@ class UsageDetailWindow(Gtk.Window):
             err_label.get_style_context().add_class("status-err")
             vbox.pack_start(err_label, False, False, 8)
 
+        if rate_limit_until:
+            remaining = rate_limit_until - datetime.now()
+            remaining_secs = max(int(remaining.total_seconds()), 0)
+            mins, secs = divmod(remaining_secs, 60)
+            retry_label = Gtk.Label(
+                label=f"⏳ Rate limited — retry in {mins}m {secs:02d}s"
+            )
+            retry_label.get_style_context().add_class("status-warn")
+            retry_label.set_halign(Gtk.Align.START)
+            vbox.pack_start(retry_label, False, False, 0)
+
         # Footer
         sep = Gtk.Separator()
         sep.get_style_context().add_class("separator")
@@ -514,6 +528,7 @@ class ClaudeUsageApp:
         self.last_updated: str = "never"
         self.token: str | None = None
         self.running = True
+        self.rate_limit_until: datetime | None = None
         self.last_notification_threshold: int = (
             0  # Track last notified threshold (0, 75, 90, 100)
         )
@@ -599,13 +614,17 @@ class ClaudeUsageApp:
                 if self.token:
                     data = fetch_usage(self.token)
                     GLib.idle_add(self._update_ui, data)
-            except RateLimitError:
-                # Show ERR but keep last good data so details window still works
+            except RateLimitError as e:
+                self.rate_limit_until = datetime.now() + timedelta(
+                    seconds=e.retry_after
+                )
                 print(
-                    "[claude-usage] Rate limited, backing off 10 min", file=sys.stderr
+                    f"[claude-usage] Rate limited, retry after {e.retry_after}s",
+                    file=sys.stderr,
                 )
                 GLib.idle_add(self._set_rate_limit_ui)
-                time.sleep(600)
+                time.sleep(e.retry_after)
+                self.rate_limit_until = None
                 continue
             except Exception as e:
                 print(f"[claude-usage] Poll error: {e}", file=sys.stderr)
@@ -619,8 +638,14 @@ class ClaudeUsageApp:
                 try:
                     data = fetch_usage(self.token)
                     GLib.idle_add(self._update_ui, data)
-                except RateLimitError:
-                    print("[claude-usage] Rate limited during refresh", file=sys.stderr)
+                except RateLimitError as e:
+                    self.rate_limit_until = datetime.now() + timedelta(
+                        seconds=e.retry_after
+                    )
+                    print(
+                        f"[claude-usage] Rate limited during refresh, retry after {e.retry_after}s",
+                        file=sys.stderr,
+                    )
                     GLib.idle_add(self._set_rate_limit_ui)
                 except Exception as e:
                     print(f"[claude-usage] Refresh error: {e}", file=sys.stderr)
@@ -754,16 +779,21 @@ class ClaudeUsageApp:
             self.last_notification_threshold = current_threshold
 
     def on_show_details(self, _widget):
-        if self.usage_data:
+        rate_limited = self.rate_limit_until and self.rate_limit_until > datetime.now()
+        if rate_limited:
+            token_status = "Rate limited"
+        elif self.usage_data:
             token_status = "Connected"
         elif not self.token:
             token_status = "No token"
-        elif self.item_5h.get_label().endswith("rate limited"):
-            token_status = "Rate limited"
         else:
             token_status = "Error"
         UsageDetailWindow(
-            self.usage_data, self.last_updated, token_status, self.subscription_info
+            self.usage_data,
+            self.last_updated,
+            token_status,
+            self.subscription_info,
+            self.rate_limit_until if rate_limited else None,
         )
 
     def on_set_token(self, _widget):
