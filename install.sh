@@ -51,6 +51,7 @@ echo "▸ Installing to $INSTALL_DIR …"
 
 mkdir -p "$INSTALL_DIR"
 cp claude_usage_widget.py "$INSTALL_DIR/claude_usage_widget.py"
+cp anthropic-1.svg "$INSTALL_DIR/anthropic-1.svg"
 chmod +x "$INSTALL_DIR/claude_usage_widget.py"
 
 mkdir -p "$(dirname "$BIN_LINK")"

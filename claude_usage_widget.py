@@ -73,45 +73,52 @@ def hex_to_rgb(hex_color: str) -> tuple:
     return tuple(int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
+def get_icon_for_pct(pct: float) -> str:
+    """Return NerdFont icon based on percentage."""
+    icons = ["󰁹", "󰂂", "󰂁", "󰂀", "󰁿", "󰁾", "󰁽", "󰁼", "󰁻", "󰁺", "󰂎", "󱉞"]
+    index = int(pct * 10)  # 0-100% -> 0-10 index (clamped)
+    if index < 0: index = 0
+    if index > 10: index = 10
+    if pct >= 1.0: index = 11  # 100%
+    return icons[index]
+
+
 def write_icon(pct: float, error: bool = False) -> str:
-    """Generate PNG icon with Cairo and return path."""
-    if error:
-        color = COLOR_GRAY
-    else:
-        color = get_color_for_pct(pct)
+    """Generate PNG icon from anthropic-1.svg and return path."""
+    import gi
+    gi.require_version("Rsvg", "2.0")
+    from gi.repository import Rsvg, Gio as gio
 
-    r, g, b = hex_to_rgb(color)
+    # Color mapping
+    color = COLOR_GRAY if error else get_color_for_pct(pct)
 
-    # Create PNG icon with Cairo
+    # Load SVG
+    svg_path = Path(__file__).resolve().parent / "anthropic-1.svg"
+    handle = Rsvg.Handle.new_from_file(str(svg_path))
+    
+    # Get dimensions (it returns a named tuple or object with attributes)
+    # Get dimensions
+    dims = handle.get_intrinsic_dimensions()
+    width = dims.out_width
+    height = dims.out_height
+
+    # Create surface and context
     size = 32
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
     ctx = cairo.Context(surface)
 
-    # Clear background (transparent)
-    ctx.set_operator(cairo.OPERATOR_CLEAR)
-    ctx.paint()
-    ctx.set_operator(cairo.OPERATOR_OVER)
+    # Scale SVG to fit
+    w_val = width.length
+    h_val = height.length
+    ctx.scale(size / w_val, size / h_val)
 
-    # Draw filled circle (background)
-    ctx.set_source_rgba(r, g, b, 0.25)
-    ctx.arc(size / 2, size / 2, 13, 0, 2 * 3.14159)
-    ctx.fill()
-
-    # Draw circle border
-    ctx.set_source_rgb(r, g, b)
-    ctx.set_line_width(2)
-    ctx.arc(size / 2, size / 2, 13, 0, 2 * 3.14159)
-    ctx.stroke()
-
-    # Draw "C" text
-    ctx.set_source_rgb(r, g, b)
-    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    ctx.set_font_size(22)
-
-    text = "C"
-    x_bearing, y_bearing, width, height, x_advance, y_advance = ctx.text_extents(text)
-    ctx.move_to(size / 2 - width / 2 - x_bearing, size / 2 - height / 2 - y_bearing)
-    ctx.show_text(text)
+    # Render
+    rect = Rsvg.Rectangle()
+    rect.x = 0
+    rect.y = 0
+    rect.width = w_val
+    rect.height = h_val
+    handle.render_document(ctx, rect)
 
     # Save to file
     icon_dir = Path("/tmp") / APP_ID
@@ -545,7 +552,9 @@ class ClaudeUsageApp:
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title(APP_NAME)
-        self.indicator.set_label("--", "")
+        # Apply FiraCode Nerd Font if available
+        font_desc = Pango.FontDescription("FiraCode Nerd Font Medium 10")
+        self.indicator.set_label(" --% --%", "")
 
         # Build menu
         self.menu = Gtk.Menu()
@@ -658,9 +667,10 @@ class ClaudeUsageApp:
         if self.usage_data:
             self._update_ui(self.usage_data)
         else:
-            self.indicator.set_label("ERR", "")
+            self.indicator.set_label("󱉞 ERR", "")
             icon_path = write_icon(0, error=True)
             self.indicator.set_icon_full(icon_path, "Error")
+
             self.item_5h.set_label("5h: rate limited")
             self.item_7d.set_label("7d: rate limited")
         return False
@@ -691,9 +701,15 @@ class ClaudeUsageApp:
                 pct7 = int(u7 * 100)
                 u7_decimal = u7
 
+            icon5 = get_icon_for_pct(u5_decimal)
+            icon7 = get_icon_for_pct(u7_decimal)
+
+            rem5 = 100 - pct5
+            rem7 = 100 - pct7
+
             dominant = max(u5_decimal, u7_decimal)
 
-            self.indicator.set_label(f"{pct5}% | {pct7}%", "")
+            self.indicator.set_label(f"{icon5} {rem5}󰏰  {icon7} {rem7}󰏰", "")
             icon_path = write_icon(dominant)
             self.indicator.set_icon_full(icon_path, f"{pct5}% | {pct7}%")
 
@@ -707,9 +723,9 @@ class ClaudeUsageApp:
             # Extra usage (pay-as-you-go credits)
             extra = data.get("extra_usage") or {}
             if extra and extra.get("is_enabled"):
-                used = extra.get("used_credits", 0)
-                limit = extra.get("monthly_limit", 0)
-                self.item_extra.set_label(f"Extra: {used:.0f}/{limit:.0f} credits")
+                used = extra.get("used_credits") or 0
+                limit = extra.get("monthly_limit") or 0
+                self.item_extra.set_label(f"Extra: {float(used):.0f}/{float(limit):.0f} credits")
                 self.item_extra.show()
             else:
                 self.item_extra.hide()
@@ -717,9 +733,10 @@ class ClaudeUsageApp:
             # Send notifications at specific thresholds only
             self._check_and_notify_threshold(pct5, pct7, dominant)
         else:
-            self.indicator.set_label("ERR", "")
+            self.indicator.set_label("󱉞 ERR", "")
             icon_path = write_icon(0, error=True)
             self.indicator.set_icon_full(icon_path, "Error")
+
             self.item_5h.set_label("5h: error")
             self.item_7d.set_label("7d: error")
 
