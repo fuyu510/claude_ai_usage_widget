@@ -77,15 +77,19 @@ def get_icon_for_pct(pct: float) -> str:
     """Return NerdFont icon based on percentage."""
     icons = ["󰁹", "󰂂", "󰂁", "󰂀", "󰁿", "󰁾", "󰁽", "󰁼", "󰁻", "󰁺", "󰂎", "󱉞"]
     index = int(pct * 10)  # 0-100% -> 0-10 index (clamped)
-    if index < 0: index = 0
-    if index > 10: index = 10
-    if pct >= 1.0: index = 11  # 100%
+    if index < 0:
+        index = 0
+    if index > 10:
+        index = 10
+    if pct >= 1.0:
+        index = 11  # 100%
     return icons[index]
 
 
 def write_icon(pct: float, error: bool = False) -> str:
     """Generate PNG icon from anthropic-1.svg and return path."""
     import gi
+
     gi.require_version("Rsvg", "2.0")
     from gi.repository import Rsvg, Gio as gio
 
@@ -95,7 +99,7 @@ def write_icon(pct: float, error: bool = False) -> str:
     # Load SVG
     svg_path = Path(__file__).resolve().parent / "anthropic-1.svg"
     handle = Rsvg.Handle.new_from_file(str(svg_path))
-    
+
     # Get dimensions (it returns a named tuple or object with attributes)
     # Get dimensions
     dims = handle.get_intrinsic_dimensions()
@@ -375,13 +379,8 @@ class UsageDetailWindow(Gtk.Window):
                 vbox.pack_start(section_label, False, False, 0)
 
                 utilization = bucket.get("utilization", 0)
-                # Handle both decimal (0-1) and percentage (0-100) formats
-                if utilization > 1:  # Already a percentage
-                    pct = int(utilization)
-                    utilization_decimal = utilization / 100
-                else:  # Decimal format
-                    pct = int(utilization * 100)
-                    utilization_decimal = utilization
+                pct = int(utilization)
+                utilization_decimal = utilization / 100
 
                 # Big number
                 val = Gtk.Label(label=f"{pct}%")
@@ -488,6 +487,7 @@ class UsageDetailWindow(Gtk.Window):
 
         self.add(vbox)
         self.show_all()
+
 
 # ── Token entry dialog ──────────────────────────────────────────────────────
 
@@ -688,20 +688,12 @@ class ClaudeUsageApp:
             u5 = five.get("utilization", 0)
             u7 = seven.get("utilization", 0)
 
-            # Handle both decimal (0-1) and percentage (0-100) formats
-            if u5 > 1:  # Already a percentage
-                pct5 = int(u5)
-                u5_decimal = u5 / 100
-            else:  # Decimal format, convert to percentage
-                pct5 = int(u5 * 100)
-                u5_decimal = u5
+            # API returns percentage (0-100)
+            pct5 = int(u5)
+            u5_decimal = u5 / 100
 
-            if u7 > 1:  # Already a percentage
-                pct7 = int(u7)
-                u7_decimal = u7 / 100
-            else:  # Decimal format, convert to percentage
-                pct7 = int(u7 * 100)
-                u7_decimal = u7
+            pct7 = int(u7)
+            u7_decimal = u7 / 100
 
             icon5 = get_icon_for_pct(u5_decimal)
             icon7 = get_icon_for_pct(u7_decimal)
@@ -727,7 +719,9 @@ class ClaudeUsageApp:
             if extra and extra.get("is_enabled"):
                 used = extra.get("used_credits") or 0
                 limit = extra.get("monthly_limit") or 0
-                self.item_extra.set_label(f"Extra: {float(used):.0f}/{float(limit):.0f} credits")
+                self.item_extra.set_label(
+                    f"Extra: {float(used):.0f}/{float(limit):.0f} credits"
+                )
                 self.item_extra.show()
             else:
                 self.item_extra.hide()
@@ -807,7 +801,7 @@ class ClaudeUsageApp:
             token_status = "No token"
         else:
             token_status = "Error"
-        
+
         # New window instance for details
         window = UsageDetailWindow(
             self.usage_data,
