@@ -213,7 +213,9 @@ def fetch_usage(token: str) -> dict | None:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 429:
-            retry_after = int(e.headers.get("Retry-After", 600))
+            retry_after = int(e.headers.get("Retry-After", 120))
+            if retry_after < 120:
+                retry_after = 120
             raise RateLimitError(retry_after)
         print(f"[claude-usage] HTTP {e.code}: {e.reason}", file=sys.stderr)
         return None
@@ -269,8 +271,8 @@ class UsageDetailWindow(Gtk.Window):
         self.set_keep_above(True)
         self.set_decorated(True)
 
-        # Lose focus → close
-        self.connect("focus-out-event", lambda *_: self.destroy())
+        # Close when clicking X
+        self.connect("delete-event", lambda *_: self.hide() or True)
 
         # Apply CSS
         css = Gtk.CssProvider()
@@ -336,9 +338,10 @@ class UsageDetailWindow(Gtk.Window):
                 extra_section.set_halign(Gtk.Align.START)
                 vbox.pack_start(extra_section, False, False, 0)
 
-                used = extra.get("used_credits", 0)
-                limit = extra.get("monthly_limit", 0)
-                extra_pct = min(int(extra.get("utilization", 0)), 100)
+                used = extra.get("used_credits") or 0
+                limit = extra.get("monthly_limit") or 0
+                utilization = extra.get("utilization") or 0
+                extra_pct = min(int(utilization), 100)
                 extra_decimal = extra_pct / 100
                 extra_color = get_color_for_pct(extra_decimal)
 
@@ -485,7 +488,6 @@ class UsageDetailWindow(Gtk.Window):
 
         self.add(vbox)
         self.show_all()
-
 
 # ── Token entry dialog ──────────────────────────────────────────────────────
 
@@ -709,7 +711,7 @@ class ClaudeUsageApp:
 
             dominant = max(u5_decimal, u7_decimal)
 
-            self.indicator.set_label(f"{icon5} {rem5}󰏰  {icon7} {rem7}󰏰", "")
+            self.indicator.set_label(f"{icon5} {rem5}󰏰 {icon7} {rem7}󰏰", "")
             icon_path = write_icon(dominant)
             self.indicator.set_icon_full(icon_path, f"{pct5}% | {pct7}%")
 
@@ -805,13 +807,16 @@ class ClaudeUsageApp:
             token_status = "No token"
         else:
             token_status = "Error"
-        UsageDetailWindow(
+        
+        # New window instance for details
+        window = UsageDetailWindow(
             self.usage_data,
             self.last_updated,
             token_status,
             self.subscription_info,
             self.rate_limit_until if rate_limited else None,
         )
+        window.show_all()
 
     def on_set_token(self, _widget):
         dialog = TokenDialog()
