@@ -9,7 +9,7 @@ A lightweight system tray widget that shows your Claude AI subscription usage pe
 
 ```bash
 # Install dependencies
-sudo apt install python3 python3-gi gir1.2-appindicator3-0.1 gir1.2-notify-0.7
+sudo apt install python3 python3-gi python3-gi-cairo gir1.2-appindicator3-0.1 gir1.2-notify-0.7
 
 # Install widget
 git clone https://github.com/StaticB1/claude_ai_usage_widget.git && cd claude_ai_usage_widget
