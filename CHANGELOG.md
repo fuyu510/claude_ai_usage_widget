@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.10] - 2026-04-18
+
+### Changed
+- **Icon completely redesigned** — the tray icon is now a 153×32 self-contained composite PNG: `[Anthropic logo]  5H [progress bar]  1W [progress bar]`. Both bars are pill-shaped (Material Design 3 style, 38×16 px), color-coded by utilization (white → yellow → orange → red), and carry the remaining-% value (8 pt Bold) centered inside each bar with a one-character gap separating the logo from the `5H` label
+- **Fill represents remaining quota** (100 % = full / safe, 0 % = empty / out); warning color threshold still keys off utilization so high usage still renders red even with a nearly-empty fill
+- **`set_label()` always empty** — panel label was unreliable on GNOME Shell 46 with `ubuntu-appindicators` (non-ASCII characters silently dropped); all information is baked into the icon PNG
+
+### Fixed
+- **Tray showing only the Anthropic logo with no usage data** — two root causes eliminated:
+  1. `AppIndicator3.set_label()` silently drops NerdFont PUA characters on GNOME Shell 46 + `ubuntu-appindicators`; usage data is now rendered directly into the icon PNG via Cairo + PangoCairo
+  2. `libayatana-appindicator`'s `set_icon_full()` short-circuits on unchanged paths (`g_strcmp0` in `app-indicator.c:2051`), leaving the initial ERR icon pinned permanently; `write_icon()` now uses monotonically-numbered filenames (`icon-N.png`) so every update forces a reload
+- **Chromatic fringing on icon text** — Cairo's default `ANTIALIAS_SUBPIXEL` encoded glyph edges as colored subpixel contributions, producing green/red halos on flat-color text in the PNG; `_apply_gray_antialias()` forces `cairo.ANTIALIAS_GRAY`
+
+### Added / changed internal APIs
+- `_rounded_rect_path()` — 4-arc canonical pill path (cairo.org / gPodder pattern)
+- `_draw_progress_bar()` — pill bar with clipped fill and two-pass inverse text rendering
+- `_apply_gray_antialias()` — grayscale AA for glyph rendering in icon PNGs
+- `write_icon(pct5, pct7, error)` — accepts per-window utilization floats (0–1); uses sequential filenames
+- Removed `_draw_battery()`, `get_icon_for_pct()`, dead `FiraCode Nerd Font` setup
+
+### install.sh
+- Added `gir1.2-rsvg-2.0`, `gir1.2-pango-1.0`, `python3-cairo` to dependency check and `apt install` suggestion — required for SVG rendering and Cairo text, were always used at runtime but previously omitted from the installer
+
+---
+
 ## [1.0.3] - 2026-02-19
 
 ### Fixed

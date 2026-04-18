@@ -13,7 +13,7 @@ Version: 1.0.0
 License: MIT
 """
 
-__version__ = "1.0.4"
+__version__ = "1.0.10"
 __author__ = "Statotech Systems"
 
 import gi
@@ -22,9 +22,10 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AppIndicator3", "0.1")
 gi.require_version("Notify", "0.7")
 
-from gi.repository import Gtk, AppIndicator3, GLib, Notify, Gdk, Pango
+from gi.repository import Gtk, AppIndicator3, GLib, Notify, Gdk
 import cairo
 import json
+import math
 import os
 import sys
 import urllib.request
@@ -49,7 +50,7 @@ CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
 
 # ── Colors for the dynamic SVG icon ─────────────────────────────────────────
 
-COLOR_GREEN = "#22c55e"
+COLOR_WHITE = "#ffffff"
 COLOR_YELLOW = "#eab308"
 COLOR_ORANGE = "#f97316"
 COLOR_RED = "#ef4444"
@@ -58,7 +59,7 @@ COLOR_GRAY = "#6b7280"
 
 def get_color_for_pct(pct: float) -> str:
     if pct < 0.5:
-        return COLOR_GREEN
+        return COLOR_WHITE
     elif pct < 0.75:
         return COLOR_YELLOW
     elif pct < 0.9:
@@ -73,62 +74,263 @@ def hex_to_rgb(hex_color: str) -> tuple:
     return tuple(int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
-def get_icon_for_pct(pct: float) -> str:
-    """Return NerdFont icon based on percentage."""
-    icons = ["󰁹", "󰂂", "󰂁", "󰂀", "󰁿", "󰁾", "󰁽", "󰁼", "󰁻", "󰁺", "󰂎", "󱉞"]
-    index = int(pct * 10)  # 0-100% -> 0-10 index (clamped)
-    if index < 0:
-        index = 0
-    if index > 10:
-        index = 10
-    if pct >= 1.0:
-        index = 11  # 100%
-    return icons[index]
+ICON_W = 153
+ICON_H = 32
+
+_icon_seq = 0
 
 
-def write_icon(pct: float, error: bool = False) -> str:
-    """Generate PNG icon from anthropic-1.svg and return path."""
+def _apply_gray_antialias(ctx: "cairo.Context") -> None:
+    """Force grayscale antialiasing on text.
+
+    Cairo's default on Linux is ``ANTIALIAS_SUBPIXEL`` (RGB subpixel AA tuned
+    for LCD panels), which rasterizes glyph edges into R/G/B subpixel
+    contributions that show up as green/red chromatic fringes when the PNG is
+    decoded off the LCD — for a small icon drawn on a solid color this looks
+    like the wrong color entirely. Grayscale AA keeps the specified color.
+    """
+    opts = cairo.FontOptions()
+    opts.set_antialias(cairo.ANTIALIAS_GRAY)
+    ctx.set_font_options(opts)
+
+
+def _rounded_rect_path(
+    ctx: "cairo.Context", x: float, y: float, w: float, h: float, r: float
+) -> None:
+    if w < 2 * r:
+        r = w / 2
+    if h < 2 * r:
+        r = h / 2
+    ctx.new_sub_path()
+    ctx.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    ctx.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    ctx.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    ctx.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+    ctx.close_path()
+
+
+def _draw_progress_bar(
+    ctx: "cairo.Context",
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    pct: int,
+    color: str,
+    text: str | None = None,
+    text_size_pt: int = 7,
+    track_alpha: float = 0.18,
+) -> None:
+    """Draw a sleek pill-shaped horizontal progress bar with optional inner text.
+
+    ``pct`` is 0–100 representing the *fill* percentage. The caller decides
+    whether this is usage or remaining — this widget passes remaining, so the
+    bar reads like a gauge (100 = full / safe, 0 = empty / critical).
+
+    When ``text`` is provided, it is drawn centered inside the bar using
+    two-pass inverse rendering: the text uses ``color`` over the empty region
+    (stays visible against a dark panel) and black over the filled region
+    (inverted for contrast against the fill). Same pattern used for the
+    battery label, now applied to the pill shape.
+    """
+    import gi
+
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import Pango, PangoCairo
+
+    r, g, b = hex_to_rgb(color)
+    radius = h / 2
+
+    _rounded_rect_path(ctx, x, y, w, h, radius)
+    ctx.set_source_rgba(r, g, b, track_alpha)
+    ctx.fill()
+
+    pct = max(0, min(100, int(pct)))
+    fill_w = w * pct / 100.0
+    if fill_w > 0:
+        ctx.save()
+        _rounded_rect_path(ctx, x, y, w, h, radius)
+        ctx.clip()
+        ctx.rectangle(x, y, fill_w, h)
+        ctx.set_source_rgb(r, g, b)
+        ctx.fill()
+        ctx.restore()
+
+    if not text:
+        return
+
+    _apply_gray_antialias(ctx)
+
+    layout = PangoCairo.create_layout(ctx)
+    layout.set_font_description(Pango.FontDescription(f"Sans Bold {text_size_pt}"))
+    layout.set_text(text, -1)
+    tw, th = layout.get_pixel_size()
+
+    text_x = x + (w - tw) / 2
+    text_y = y + (h - th) / 2
+
+    ctx.move_to(text_x, text_y)
+    ctx.set_source_rgb(r, g, b)
+    PangoCairo.show_layout(ctx, layout)
+
+    if fill_w > 0:
+        ctx.save()
+        _rounded_rect_path(ctx, x, y, w, h, radius)
+        ctx.clip()
+        ctx.rectangle(x, y, fill_w, h)
+        ctx.clip()
+        ctx.move_to(text_x, text_y)
+        ctx.set_source_rgb(0.0, 0.0, 0.0)
+        PangoCairo.show_layout(ctx, layout)
+        ctx.restore()
+
+
+def _draw_pango_text(
+    ctx: "cairo.Context",
+    x: float,
+    y: float,
+    text: str,
+    color: str,
+    size_pt: int = 8,
+    weight: str = "Bold",
+) -> None:
+    import gi
+
+    gi.require_version("PangoCairo", "1.0")
+    from gi.repository import Pango, PangoCairo
+
+    _apply_gray_antialias(ctx)
+
+    layout = PangoCairo.create_layout(ctx)
+    layout.set_font_description(Pango.FontDescription(f"Sans {weight} {size_pt}"))
+    layout.set_text(text, -1)
+    r, g, b = hex_to_rgb(color)
+    ctx.set_source_rgb(r, g, b)
+    ctx.move_to(x, y)
+    PangoCairo.show_layout(ctx, layout)
+
+
+def write_icon(
+    pct5: float = 0.0,
+    pct7: float = 0.0,
+    error: bool = False,
+) -> str:
+    """Generate a composite PNG: Anthropic logo + ``5H {bar}  1W {bar}`` layout.
+
+    Each progress bar is a pill-shaped horizontal gauge whose fill length
+    follows the *remaining* quota (100 % = full / safe, 0 % = empty / out).
+    The remaining-% number is drawn centered inside each bar with two-pass
+    inverse coloring (black over the filled portion, bar color over the
+    empty portion). Labels ``5H`` (five-hour window) and ``1W`` (seven-day /
+    one-week window) sit immediately before their bars.
+
+    The on-panel ``set_label()`` is always kept empty: relying on it is
+    fragile (it fails silently on GNOME Shell 46 with the
+    ``ubuntu-appindicators`` extension when the string contains non-ASCII
+    characters), and mirroring the icon content there would look duplicated.
+
+    A fresh filename (``icon-<seq>.png``) is used on every call: AppIndicator
+    short-circuits ``set_icon_full()`` when the path matches the currently-set
+    icon, so overwriting a single file in place leaves the initial icon pinned
+    in the panel. Rotating the filename forces a reload every update.
+    """
     import gi
 
     gi.require_version("Rsvg", "2.0")
-    from gi.repository import Rsvg, Gio as gio
+    from gi.repository import Rsvg
 
-    # Color mapping
-    color = COLOR_GRAY if error else get_color_for_pct(pct)
+    pct5 = max(0.0, min(1.0, pct5))
+    pct7 = max(0.0, min(1.0, pct7))
 
-    # Load SVG
-    svg_path = Path(__file__).resolve().parent / "anthropic-1.svg"
-    handle = Rsvg.Handle.new_from_file(str(svg_path))
+    rem5 = 100 - int(pct5 * 100)
+    rem7 = 100 - int(pct7 * 100)
 
-    # Get dimensions (it returns a named tuple or object with attributes)
-    # Get dimensions
-    dims = handle.get_intrinsic_dimensions()
-    width = dims.out_width
-    height = dims.out_height
+    color5 = COLOR_GRAY if error else get_color_for_pct(pct5)
+    color7 = COLOR_GRAY if error else get_color_for_pct(pct7)
 
-    # Create surface and context
-    size = 32
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, ICON_W, ICON_H)
     ctx = cairo.Context(surface)
 
-    # Scale SVG to fit
-    w_val = width.length
-    h_val = height.length
-    ctx.scale(size / w_val, size / h_val)
+    svg_path = Path(__file__).resolve().parent / "anthropic-1.svg"
+    handle = Rsvg.Handle.new_from_file(str(svg_path))
+    dims = handle.get_intrinsic_dimensions()
+    svg_w = dims.out_width.length
+    svg_h = dims.out_height.length
 
-    # Render
+    LOGO_SIZE = 26
+    ctx.save()
+    ctx.translate(1, (ICON_H - LOGO_SIZE) / 2)
+    ctx.scale(LOGO_SIZE / svg_w, LOGO_SIZE / svg_h)
     rect = Rsvg.Rectangle()
     rect.x = 0
     rect.y = 0
-    rect.width = w_val
-    rect.height = h_val
+    rect.width = svg_w
+    rect.height = svg_h
     handle.render_document(ctx, rect)
+    ctx.restore()
 
-    # Save to file
+    if error:
+        _draw_pango_text(
+            ctx, x=30, y=(ICON_H - 14) / 2, text="ERR", color=COLOR_GRAY, size_pt=10
+        )
+    else:
+        LABEL_COLOR = COLOR_WHITE
+        LABEL_SIZE = 8
+        LABEL_Y = 8
+
+        BAR_W = 38
+        BAR_H = 16
+        BAR_Y = (ICON_H - BAR_H) / 2
+
+        _draw_pango_text(
+            ctx, x=33, y=LABEL_Y, text="5H", color=LABEL_COLOR, size_pt=LABEL_SIZE
+        )
+        _draw_progress_bar(
+            ctx,
+            x=50,
+            y=BAR_Y,
+            w=BAR_W,
+            h=BAR_H,
+            pct=rem5,
+            color=color5,
+            text=f"{rem5}%",
+            text_size_pt=8,
+        )
+
+        _draw_pango_text(
+            ctx, x=93, y=LABEL_Y, text="1W", color=LABEL_COLOR, size_pt=LABEL_SIZE
+        )
+        _draw_progress_bar(
+            ctx,
+            x=112,
+            y=BAR_Y,
+            w=BAR_W,
+            h=BAR_H,
+            pct=rem7,
+            color=color7,
+            text=f"{rem7}%",
+            text_size_pt=8,
+        )
+
     icon_dir = Path("/tmp") / APP_ID
     icon_dir.mkdir(exist_ok=True)
-    icon_path = icon_dir / "icon.png"
+
+    global _icon_seq
+    _icon_seq += 1
+    icon_path = icon_dir / f"icon-{_icon_seq}.png"
     surface.write_to_png(str(icon_path))
+
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    for old in sorted(icon_dir.glob("icon*.png"), key=_mtime)[:-2]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
     return str(icon_path)
 
@@ -545,8 +747,7 @@ class ClaudeUsageApp:
 
         Notify.init(APP_NAME)
 
-        # Create indicator
-        icon_path = write_icon(0, error=True)
+        icon_path = write_icon(0.0, 0.0, error=True)
         self.indicator = AppIndicator3.Indicator.new(
             APP_ID,
             icon_path,
@@ -554,9 +755,7 @@ class ClaudeUsageApp:
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.indicator.set_title(APP_NAME)
-        # Apply FiraCode Nerd Font if available
-        font_desc = Pango.FontDescription("FiraCode Nerd Font Medium 10")
-        self.indicator.set_label(" --% --%", "")
+        self.indicator.set_label("", "")
 
         # Build menu
         self.menu = Gtk.Menu()
@@ -669,8 +868,8 @@ class ClaudeUsageApp:
         if self.usage_data:
             self._update_ui(self.usage_data)
         else:
-            self.indicator.set_label("󱉞 ERR", "")
-            icon_path = write_icon(0, error=True)
+            self.indicator.set_label("", "")
+            icon_path = write_icon(0.0, 0.0, error=True)
             self.indicator.set_icon_full(icon_path, "Error")
 
             self.item_5h.set_label("5h: rate limited")
@@ -695,16 +894,13 @@ class ClaudeUsageApp:
             pct7 = int(u7)
             u7_decimal = u7 / 100
 
-            icon5 = get_icon_for_pct(u5_decimal)
-            icon7 = get_icon_for_pct(u7_decimal)
-
             rem5 = 100 - pct5
             rem7 = 100 - pct7
 
             dominant = max(u5_decimal, u7_decimal)
 
-            self.indicator.set_label(f"{icon5} {rem5}󰏰 {icon7} {rem7}󰏰", "")
-            icon_path = write_icon(dominant)
+            self.indicator.set_label("", "")
+            icon_path = write_icon(u5_decimal, u7_decimal)
             self.indicator.set_icon_full(icon_path, f"{pct5}% | {pct7}%")
 
             self.item_5h.set_label(
@@ -729,8 +925,8 @@ class ClaudeUsageApp:
             # Send notifications at specific thresholds only
             self._check_and_notify_threshold(pct5, pct7, dominant)
         else:
-            self.indicator.set_label("󱉞 ERR", "")
-            icon_path = write_icon(0, error=True)
+            self.indicator.set_label("", "")
+            icon_path = write_icon(0.0, 0.0, error=True)
             self.indicator.set_icon_full(icon_path, "Error")
 
             self.item_5h.set_label("5h: error")

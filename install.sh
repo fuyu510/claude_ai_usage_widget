@@ -21,23 +21,31 @@ if ! command -v python3 &>/dev/null; then
     MISSING+=("python3")
 fi
 
-# GIR packages
-python3 -c "import gi; gi.require_version('Gtk','3.0'); gi.require_version('AppIndicator3','0.1'); gi.require_version('Notify','0.7')" 2>/dev/null || {
-    MISSING+=("gir1.2-appindicator3-0.1" "gir1.2-notify-0.7")
+# GIR packages + cairo (required for icon rendering)
+python3 -c "
+import gi, cairo
+gi.require_version('Gtk','3.0')
+gi.require_version('AppIndicator3','0.1')
+gi.require_version('Notify','0.7')
+gi.require_version('Rsvg','2.0')
+gi.require_version('PangoCairo','1.0')
+from gi.repository import Gtk, AppIndicator3, Notify, Rsvg, PangoCairo
+" 2>/dev/null || {
+    MISSING+=("gir1.2-appindicator3-0.1" "gir1.2-notify-0.7" "gir1.2-rsvg-2.0" "gir1.2-pango-1.0" "python3-cairo")
 }
 
 if [ ${#MISSING[@]} -gt 0 ]; then
     echo "  ✗ Missing packages: ${MISSING[*]}"
     echo ""
     echo "  Install them with:"
-    echo "    sudo apt install python3 gir1.2-appindicator3-0.1 gir1.2-notify-0.7 python3-gi"
+    echo "    sudo apt install python3 python3-gi python3-cairo gir1.2-appindicator3-0.1 gir1.2-notify-0.7 gir1.2-rsvg-2.0 gir1.2-pango-1.0"
     echo ""
     read -rp "  Install now? [Y/n] " yn
     case "${yn,,}" in
         n|no) echo "  Aborted."; exit 1 ;;
         *)
             sudo apt update
-            sudo apt install -y python3 python3-gi gir1.2-appindicator3-0.1 gir1.2-notify-0.7
+            sudo apt install -y python3 python3-gi python3-cairo gir1.2-appindicator3-0.1 gir1.2-notify-0.7 gir1.2-rsvg-2.0 gir1.2-pango-1.0
             ;;
     esac
 fi
