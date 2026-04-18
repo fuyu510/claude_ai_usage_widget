@@ -581,27 +581,26 @@ class UsageDetailWindow(Gtk.Window):
                 vbox.pack_start(section_label, False, False, 0)
 
                 utilization = bucket.get("utilization", 0)
-                pct = int(utilization)
                 utilization_decimal = utilization / 100
+                rem = 100 - int(utilization)
+                rem_decimal = 1.0 - utilization_decimal
 
-                # Big number
-                val = Gtk.Label(label=f"{pct}%")
+                val = Gtk.Label(label=f"{rem}%")
                 val.get_style_context().add_class("metric-value")
                 color = get_color_for_pct(utilization_decimal)
                 val.set_markup(
-                    f'<span foreground="{color}" font_weight="bold" font="28">{pct}%</span>'
+                    f'<span foreground="{color}" font_weight="bold" font="28">{rem}%</span>'
                 )
                 val.set_halign(Gtk.Align.START)
                 vbox.pack_start(val, False, False, 0)
 
-                # Progress bar (GTK level bar)
                 bar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
                 bar_box.get_style_context().add_class("bar-bg")
 
                 bar = Gtk.LevelBar()
                 bar.set_min_value(0)
                 bar.set_max_value(1.0)
-                bar.set_value(utilization_decimal)
+                bar.set_value(rem_decimal)
                 bar.set_size_request(-1, 8)
 
                 # Remove default offset classes and add custom
@@ -901,13 +900,13 @@ class ClaudeUsageApp:
 
             self.indicator.set_label("", "")
             icon_path = write_icon(u5_decimal, u7_decimal)
-            self.indicator.set_icon_full(icon_path, f"{pct5}% | {pct7}%")
+            self.indicator.set_icon_full(icon_path, f"{rem5}% | {rem7}%")
 
             self.item_5h.set_label(
-                f"5h: {pct5}%  (resets {format_reset_time(five.get('resets_at'))})"
+                f"5h: {rem5}%  (resets {format_reset_time(five.get('resets_at'))})"
             )
             self.item_7d.set_label(
-                f"7d: {pct7}%  (resets {format_reset_time(seven.get('resets_at'))})"
+                f"7d: {rem7}%  (resets {format_reset_time(seven.get('resets_at'))})"
             )
 
             # Extra usage (pay-as-you-go credits)
