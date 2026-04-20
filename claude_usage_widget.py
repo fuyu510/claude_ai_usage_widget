@@ -13,7 +13,7 @@ Version: 1.0.0
 License: MIT
 """
 
-__version__ = "1.0.10"
+__version__ = "1.1.0"
 __author__ = "Statotech Systems"
 
 import gi
@@ -28,11 +28,11 @@ import json
 import math
 import os
 import sys
-import urllib.request
-import urllib.error
-import ssl
 import threading
 import time
+import urllib.error
+import urllib.request
+import ssl
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -40,13 +40,28 @@ from pathlib import Path
 
 APP_ID = "claude-usage-widget"
 APP_NAME = "Claude Usage"
-ICON_NAME = "network-transmit-receive"  # fallback icon
-REFRESH_INTERVAL_SEC = 120  # 2 minutes
+ICON_NAME = "network-transmit-receive"
+REFRESH_INTERVAL_SEC = 120
 USAGE_API_URL = "https://api.anthropic.com/api/oauth/usage"
 
 CONFIG_DIR = Path.home() / ".config" / APP_ID
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
+
+# OAuth refresh endpoint + client_id extracted from the official Claude Code
+# CLI (`~/.local/lib/node_modules/@anthropic-ai/claude-code/cli.js`). The
+# widget only uses these for REFRESHING an access token that Claude Code
+# already obtained; it does not perform the full authorize/PKCE handshake
+# itself. Initial sign-in is expected to happen via `claude` (Claude Code).
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+OAUTH_SCOPES = [
+    "user:profile",
+    "user:inference",
+    "user:sessions:claude_code",
+    "user:mcp_servers",
+    "user:file_upload",
+]
 
 # ── Colors for the dynamic SVG icon ─────────────────────────────────────────
 
@@ -335,62 +350,168 @@ def write_icon(
     return str(icon_path)
 
 
-# ── Token loading ───────────────────────────────────────────────────────────
+# ── Token storage ───────────────────────────────────────────────────────────
 
 
-def load_token() -> str | None:
-    """Try loading OAuth token from Claude Code creds, then config file."""
-    # 1. Claude Code credentials (Linux)
+_token_lock = threading.Lock()
+
+
+def _read_widget_config() -> dict:
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        return json.loads(CONFIG_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_widget_config(config: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CONFIG_DIR, 0o700)
+    except OSError:
+        pass
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    os.chmod(CONFIG_FILE, 0o600)
+
+
+def load_oauth_bundle() -> dict | None:
+    """Load the full OAuth bundle (access/refresh/expiresAt/scopes/...).
+
+    Widget config is preferred because the widget owns it; Claude Code's
+    credentials file is used as a read-only fallback so that users who
+    already logged in via Claude Code need no extra setup.
+    """
+    config = _read_widget_config()
+    bundle = config.get("claudeAiOauth")
+    if isinstance(bundle, dict) and bundle.get("accessToken"):
+        return bundle
+
     if CREDENTIALS_FILE.exists():
         try:
             data = json.loads(CREDENTIALS_FILE.read_text())
-            token = data.get("claudeAiOauth", {}).get("accessToken")
-            if token:
-                return token
-        except (json.JSONDecodeError, KeyError):
+            bundle = data.get("claudeAiOauth")
+            if isinstance(bundle, dict) and bundle.get("accessToken"):
+                return bundle
+        except (json.JSONDecodeError, OSError):
             pass
-
-    # 2. Widget config file
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text())
-            token = data.get("oauth_token")
-            if token:
-                return token
-        except (json.JSONDecodeError, KeyError):
-            pass
-
     return None
+
+
+def save_oauth_bundle(bundle: dict) -> None:
+    config = _read_widget_config()
+    config["claudeAiOauth"] = bundle
+    config.pop("oauth_token", None)
+    _write_widget_config(config)
 
 
 def load_subscription_info() -> dict | None:
-    """Load subscription information from Claude Code credentials."""
-    if CREDENTIALS_FILE.exists():
-        try:
-            data = json.loads(CREDENTIALS_FILE.read_text())
-            oauth = data.get("claudeAiOauth", {})
-            if oauth:
-                return {
-                    "subscription_type": oauth.get("subscriptionType", "").title(),
-                    "rate_limit_tier": oauth.get("rateLimitTier", ""),
-                }
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return None
+    bundle = load_oauth_bundle()
+    if not bundle:
+        return None
+    return {
+        "subscription_type": (bundle.get("subscriptionType") or "").title(),
+        "rate_limit_tier": bundle.get("rateLimitTier") or "",
+    }
 
 
-def save_token(token: str):
-    """Save token to widget config."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    config = {}
-    if CONFIG_FILE.exists():
-        try:
-            config = json.loads(CONFIG_FILE.read_text())
-        except json.JSONDecodeError:
-            pass
-    config["oauth_token"] = token
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
-    os.chmod(CONFIG_FILE, 0o600)
+def load_token() -> str | None:
+    """Return a usable access token, refreshing silently if expired."""
+    with _token_lock:
+        bundle = load_oauth_bundle()
+        if not bundle:
+            return None
+
+        access = bundle.get("accessToken")
+        expires_at = bundle.get("expiresAt") or 0
+        now_ms = int(time.time() * 1000)
+
+        if access and expires_at > now_ms + 60_000:
+            return access
+
+        refresh = bundle.get("refreshToken")
+        if not refresh:
+            return access
+
+        refreshed = _refresh_access_token(refresh, bundle)
+        if refreshed:
+            save_oauth_bundle(refreshed)
+            return refreshed.get("accessToken")
+
+        return access
+
+
+def save_token(token: str) -> None:
+    """Store a manually-entered access token.
+
+    Used as a last-resort fallback when the native OAuth flow is unavailable
+    (e.g. headless system). No refresh token is stored, so the widget will
+    stop working when this token expires.
+    """
+    with _token_lock:
+        bundle = load_oauth_bundle() or {}
+        bundle["accessToken"] = token
+        bundle.pop("refreshToken", None)
+        bundle.pop("expiresAt", None)
+        save_oauth_bundle(bundle)
+
+
+# ── Token refresh ───────────────────────────────────────────────────────────
+
+
+def _refresh_access_token(refresh_token: str, prev_bundle: dict) -> dict | None:
+    """Exchange a refresh token for a new access token bundle.
+
+    Returns a bundle merged on top of ``prev_bundle`` so that fields the
+    refresh response omits (``subscriptionType`` etc.) are preserved.
+    Returns ``None`` if the refresh call fails — the caller is expected
+    to surface that condition to the user, not retry silently.
+    """
+    payload = json.dumps(
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": OAUTH_CLIENT_ID,
+            "scope": " ".join(prev_bundle.get("scopes") or OAUTH_SCOPES),
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        OAUTH_TOKEN_URL,
+        data=payload,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": f"claude-usage-widget/{__version__}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[claude-usage] Token refresh failed: {e}", file=sys.stderr)
+        return None
+
+    merged = dict(prev_bundle)
+    merged.update(_token_response_to_bundle(data))
+    if not merged.get("refreshToken"):
+        merged["refreshToken"] = refresh_token
+    return merged
+
+
+def _token_response_to_bundle(data: dict) -> dict:
+    scope = data.get("scope") or ""
+    scopes = scope.split() if scope else list(OAUTH_SCOPES)
+    expires_in = int(data.get("expires_in") or 0)
+    expires_at = int(time.time() * 1000) + expires_in * 1000
+    return {
+        "accessToken": data.get("access_token"),
+        "refreshToken": data.get("refresh_token"),
+        "expiresAt": expires_at,
+        "scopes": scopes,
+        "subscriptionType": data.get("subscription_type") or "",
+        "rateLimitTier": data.get("rate_limit_tier") or "",
+    }
 
 
 # ── API call ────────────────────────────────────────────────────────────────
@@ -401,18 +522,19 @@ class RateLimitError(Exception):
         self.retry_after = retry_after
 
 
-def fetch_usage(token: str) -> dict | None:
-    """Fetch usage data from the Claude API."""
+class AuthExpiredError(Exception):
+    pass
+
+
+def _fetch_usage_once(token: str) -> dict | None:
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "claude-usage-widget/1.0",
+        "User-Agent": f"claude-usage-widget/{__version__}",
         "Authorization": f"Bearer {token}",
         "anthropic-beta": "oauth-2025-04-20",
     }
-
     req = urllib.request.Request(USAGE_API_URL, headers=headers, method="GET")
-
     ctx = ssl.create_default_context()
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
@@ -423,11 +545,32 @@ def fetch_usage(token: str) -> dict | None:
             if retry_after < 120:
                 retry_after = 120
             raise RateLimitError(retry_after)
+        if e.code in (401, 403):
+            raise AuthExpiredError(f"HTTP {e.code}: {e.reason}")
         print(f"[claude-usage] HTTP {e.code}: {e.reason}", file=sys.stderr)
         return None
     except Exception as e:
         print(f"[claude-usage] Error: {e}", file=sys.stderr)
         return None
+
+
+def fetch_usage(token: str) -> dict | None:
+    """Fetch usage data. On 401, refresh token once and retry transparently."""
+    try:
+        return _fetch_usage_once(token)
+    except AuthExpiredError:
+        bundle = load_oauth_bundle()
+        refresh = bundle.get("refreshToken") if bundle else None
+        if not refresh or not bundle:
+            raise
+        refreshed = _refresh_access_token(refresh, bundle)
+        if not refreshed or not refreshed.get("accessToken"):
+            raise
+        save_oauth_bundle(refreshed)
+        try:
+            return _fetch_usage_once(refreshed["accessToken"])
+        except AuthExpiredError:
+            raise
 
 
 # ── Time formatting ─────────────────────────────────────────────────────────
@@ -476,9 +619,6 @@ class UsageDetailWindow(Gtk.Window):
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         self.set_keep_above(True)
         self.set_decorated(True)
-
-        # Close when clicking X
-        self.connect("delete-event", lambda *_: self.hide() or True)
 
         # Apply CSS
         css = Gtk.CssProvider()
@@ -743,6 +883,7 @@ class ClaudeUsageApp:
             0  # Track last notified threshold (0, 75, 90, 100)
         )
         self.startup_notification_sent: bool = False
+        self.detail_window: "UsageDetailWindow | None" = None
 
         Notify.init(APP_NAME)
 
@@ -806,17 +947,27 @@ class ClaudeUsageApp:
         self.poll_thread.start()
 
     def _prompt_token_once(self):
-        """Show token dialog on first run if no token found."""
         if not self.token:
             self.on_set_token(None)
-        return False  # don't repeat
+        return False
+
+    def _notify(self, title: str, body: str, urgent: bool = False) -> None:
+        try:
+            n = Notify.Notification.new(
+                title,
+                body,
+                "dialog-warning" if urgent else "dialog-information",
+            )
+            if urgent:
+                n.set_urgency(Notify.Urgency.CRITICAL)
+            n.show()
+        except Exception as e:
+            print(f"[claude-usage] Notify failed: {e}", file=sys.stderr)
 
     def _poll_loop(self):
         """Background thread: fetch usage periodically."""
         while self.running:
             try:
-                # Re-read credentials on every cycle so a token refreshed
-                # by Claude Code overnight is picked up automatically.
                 fresh = load_token()
                 if fresh:
                     self.token = fresh
@@ -835,9 +986,23 @@ class ClaudeUsageApp:
                 time.sleep(e.retry_after)
                 self.rate_limit_until = None
                 continue
+            except AuthExpiredError as e:
+                print(f"[claude-usage] Auth expired: {e}", file=sys.stderr)
+                self.token = None
+                GLib.idle_add(self._update_ui, None)
+                GLib.idle_add(self._notify_reauth_needed)
             except Exception as e:
                 print(f"[claude-usage] Poll error: {e}", file=sys.stderr)
             time.sleep(REFRESH_INTERVAL_SEC)
+
+    def _notify_reauth_needed(self) -> bool:
+        self._notify(
+            "Claude session expired",
+            "Refresh token is no longer valid. Run `claude` once in a "
+            "terminal to sign in again, or use 'Set Token…'.",
+            urgent=True,
+        )
+        return False
 
     def force_refresh(self):
         """Immediate refresh triggered by user."""
@@ -856,6 +1021,11 @@ class ClaudeUsageApp:
                         file=sys.stderr,
                     )
                     GLib.idle_add(self._set_rate_limit_ui)
+                except AuthExpiredError as e:
+                    print(f"[claude-usage] Auth expired during refresh: {e}", file=sys.stderr)
+                    self.token = None
+                    GLib.idle_add(self._update_ui, None)
+                    GLib.idle_add(self._notify_reauth_needed)
                 except Exception as e:
                     print(f"[claude-usage] Refresh error: {e}", file=sys.stderr)
 
@@ -926,12 +1096,17 @@ class ClaudeUsageApp:
         else:
             self.indicator.set_label("", "")
             icon_path = write_icon(0.0, 0.0, error=True)
-            self.indicator.set_icon_full(icon_path, "Error")
+            tooltip = "No token — run Claude Login" if not self.token else "Error"
+            self.indicator.set_icon_full(icon_path, tooltip)
 
-            self.item_5h.set_label("5h: error")
-            self.item_7d.set_label("7d: error")
+            if not self.token:
+                self.item_5h.set_label("5h: not logged in")
+                self.item_7d.set_label("7d: run 'Claude Login…'")
+            else:
+                self.item_5h.set_label("5h: error")
+                self.item_7d.set_label("7d: error")
 
-        return False  # GLib.idle_add one-shot
+        return False
 
     def _check_and_notify_threshold(self, pct5: int, pct7: int, dominant: float):
         """Send notifications only at specific thresholds: startup, 75%, 90%, 100%"""
@@ -987,6 +1162,10 @@ class ClaudeUsageApp:
             self.last_notification_threshold = current_threshold
 
     def on_show_details(self, _widget):
+        if self.detail_window is not None:
+            self.detail_window.destroy()
+            return
+
         rate_limited = self.rate_limit_until and self.rate_limit_until > datetime.now()
         if rate_limited:
             token_status = "Rate limited"
@@ -997,7 +1176,6 @@ class ClaudeUsageApp:
         else:
             token_status = "Error"
 
-        # New window instance for details
         window = UsageDetailWindow(
             self.usage_data,
             self.last_updated,
@@ -1005,7 +1183,12 @@ class ClaudeUsageApp:
             self.subscription_info,
             self.rate_limit_until if rate_limited else None,
         )
+        window.connect("destroy", self._on_detail_window_destroyed)
+        self.detail_window = window
         window.show_all()
+
+    def _on_detail_window_destroyed(self, _window):
+        self.detail_window = None
 
     def on_set_token(self, _widget):
         dialog = TokenDialog()

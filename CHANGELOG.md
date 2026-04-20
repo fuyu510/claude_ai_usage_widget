@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-04-20
+
+### Fixed
+- **"ERR" after a fresh boot when Claude Code hasn't been run yet** — the widget no longer needs you to launch `claude` once per boot just to prime its token. Access tokens in `~/.claude/.credentials.json` are usually expired by the time the widget reads them, and the old code blindly used them → instant `ERR`. The widget now transparently refreshes the token with the stored `refreshToken`, exactly the same way Claude Code does on its own startup.
+- **Widget would silently stop working after ~1 hour** — expired tokens were previously trusted indefinitely. The widget now refreshes proactively (when the access token is within 60 s of expiry) and reactively (on 401/403 from the usage API, with a single silent retry).
+
+### Added
+- **Proactive + reactive token refresh** (`_refresh_access_token`) — hits the same `https://platform.claude.com/v1/oauth/token` endpoint Claude Code uses, with the same `client_id` (`9d1c250a-e61b-44d9-88ed-5944d1962f5e`), extracted directly from the installed Claude Code binary for auditability.
+- **`AuthExpiredError`** — distinguishes 401/403 from transient errors so the poll loop knows when to stop retrying and notify the user.
+- **Re-auth notification** — if the refresh token itself has expired (rare, happens after very long inactivity), the widget pops a desktop notification telling the user to run `claude` once in a terminal, rather than silently failing.
+
+### Changed
+- **Token storage format** — widget config now stores the full OAuth bundle (`accessToken`, `refreshToken`, `expiresAt`, `scopes`, `subscriptionType`, `rateLimitTier`) instead of a bare `oauth_token` string. Claude Code's `~/.claude/.credentials.json` is still read as a fallback on first launch but is never written to by the widget — avoiding refresh-token-rotation races with a running Claude Code process.
+- **User-Agent** — now includes `__version__` instead of the hardcoded `1.0`.
+
+### Internal
+- `threading.Lock` around refresh to prevent concurrent poll + force-refresh from double-spending the single-use refresh token.
+- The widget deliberately does **not** implement the full OAuth authorize/PKCE handshake. Initial sign-in is always expected to happen via `claude` (Claude Code). This avoids duplicating Anthropic's authorize UI and keeps the widget's scope minimal — refresh and fetch only.
+
+---
+
 ## [1.0.10] - 2026-04-18
 
 ### Changed
