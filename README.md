@@ -70,17 +70,19 @@ ps aux | grep '[c]laude_usage_widget'
 
 ## Getting Your OAuth Token
 
-### Option A: Claude Code (automatic)
+### Option A: Claude Code (automatic — recommended)
 
-If you have [Claude Code](https://code.claude.com) installed and logged in:
+If you have [Claude Code](https://code.claude.com) installed and signed in at least once:
 
 ```bash
-claude login   # if not already
+claude   # or any `claude auth login` if you haven't signed in before
 ```
 
-The widget auto-reads `~/.claude/.credentials.json` — no extra config needed.
+The widget reads `~/.claude/.credentials.json` and **automatically refreshes the access token on your behalf** whenever it expires — you do **not** need to re-run `claude` after every reboot. The widget uses the same `client_id` and refresh endpoint (`https://platform.claude.com/v1/oauth/token`) that Claude Code uses internally.
 
-### Option B: Browser DevTools (manual)
+If the refresh token itself has expired (rare — happens after very long inactivity), the widget pops a desktop notification asking you to run `claude` once to re-authenticate.
+
+### Option B: Browser DevTools (manual fallback)
 
 1. Open https://claude.ai and log in
 2. Open DevTools → **Network** tab
@@ -203,8 +205,8 @@ This is especially useful for:
 | `ModuleNotFoundError: No module named 'gi'` | You're using pyenv/conda Python. Use `claude-widget-start` which uses system Python |
 | `symbol lookup error: libpthread.so.0` | Snap library conflict. Use `claude-widget-start` which sets clean environment |
 | `command not found` after install/uninstall | Run `hash -r` to clear bash's command cache, or close/reopen terminal |
-| Token expired / 401 | Re-run `claude login` (Claude Code) or re-extract from browser |
-| Icon shows "ERR" | Check token validity and network connectivity |
+| Token expired / 401 | Widget auto-refreshes silently. If refresh also fails (rare), a desktop notification will ask you to run `claude` once to re-authenticate. |
+| Icon shows "ERR" right after boot | Usually means Claude Code's token expired overnight. The widget now refreshes it automatically on next poll — should clear within ~2 minutes. If it doesn't, run `claude` once, or check `/tmp/claude-widget.log`. |
 
 ### Python Environment Issues
 

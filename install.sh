@@ -155,7 +155,7 @@ else
     echo "    You'll be prompted to enter your OAuth token on first run."
     echo ""
     echo "    To get your token:"
-    echo "    Option A: Install Claude Code → 'claude login' → token saved automatically"
+    echo "    Option A: Install Claude Code and run 'claude' once; the widget auto-refreshes thereafter"
     echo "    Option B: Browser DevTools → Network tab → filter 'api.anthropic.com'"
     echo "              → copy the Authorization: Bearer sk-ant-oat01-... header value"
 fi
