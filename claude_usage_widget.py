@@ -691,14 +691,16 @@ class UsageDetailWindow(Gtk.Window):
                 extra_decimal = extra_pct / 100
                 extra_color = get_color_for_pct(extra_decimal)
 
+                extra_rem = 100 - extra_pct
+                remaining_credits = max(0.0, float(limit) - float(used))
                 extra_val = Gtk.Label()
                 extra_val.set_markup(
-                    f'<span foreground="{extra_color}" font_weight="bold" font="28">{extra_pct}%</span>'
+                    f'<span foreground="{extra_color}" font_weight="bold" font="28">{extra_rem}%</span>'
                 )
                 extra_val.set_halign(Gtk.Align.START)
                 vbox.pack_start(extra_val, False, False, 0)
 
-                credits_lbl = Gtk.Label(label=f"{used:.0f} / {limit:.0f} credits used")
+                credits_lbl = Gtk.Label(label=f"{remaining_credits:.0f} / {limit:.0f} credits remaining")
                 credits_lbl.get_style_context().add_class("metric-sub")
                 credits_lbl.set_halign(Gtk.Align.START)
                 vbox.pack_start(credits_lbl, False, False, 0)
@@ -1111,11 +1113,14 @@ class ClaudeUsageApp:
     def _check_and_notify_threshold(self, pct5: int, pct7: int, dominant: float):
         """Send notifications only at specific thresholds: startup, 75%, 90%, 100%"""
         # Startup notification (first successful data fetch)
+        rem5 = 100 - pct5
+        rem7 = 100 - pct7
+
         if not self.startup_notification_sent:
             self.startup_notification_sent = True
             n = Notify.Notification.new(
                 "✓ Claude Usage Widget Started",
-                f"Current usage: 5h: {pct5}%  |  7d: {pct7}%",
+                f"Remaining: 5h: {rem5}%  |  7d: {rem7}%",
                 "dialog-information",
             )
             n.show()
@@ -1136,22 +1141,22 @@ class ClaudeUsageApp:
         if current_threshold > self.last_notification_threshold:
             if current_threshold == 75:
                 n = Notify.Notification.new(
-                    "⚠️ Claude Usage: 75%",
-                    f"5h: {pct5}%  |  7d: {pct7}%\nApproaching rate limits.",
+                    "⚠️ Claude Remaining: 25%",
+                    f"5h: {rem5}% remaining  |  7d: {rem7}% remaining\nApproaching rate limits.",
                     "dialog-warning",
                 )
                 n.set_urgency(Notify.Urgency.NORMAL)
             elif current_threshold == 90:
                 n = Notify.Notification.new(
-                    "⚠️ Claude Usage: 90%",
-                    f"5h: {pct5}%  |  7d: {pct7}%\nClose to rate limits!",
+                    "⚠️ Claude Remaining: 10%",
+                    f"5h: {rem5}% remaining  |  7d: {rem7}% remaining\nClose to rate limits!",
                     "dialog-warning",
                 )
                 n.set_urgency(Notify.Urgency.CRITICAL)
             elif current_threshold == 100:
                 n = Notify.Notification.new(
-                    "🛑 Claude Usage: 100%",
-                    f"5h: {pct5}%  |  7d: {pct7}%\nRate limit reached!",
+                    "🛑 Claude Remaining: 0%",
+                    f"5h: {rem5}% remaining  |  7d: {rem7}% remaining\nRate limit reached!",
                     "dialog-error",
                 )
                 n.set_urgency(Notify.Urgency.CRITICAL)
